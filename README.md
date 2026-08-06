@@ -8,8 +8,7 @@ which measures pipeline noise), and renders charts, tables, and prose
 explanations of the statistics.
 
 The rendered report is published automatically to GitHub Pages:
-<https://eightbitraptor.github.io/rlgc-perf-test/>
-
+<https://www.eightbitraptor.com/rlgc-perf-test/>
 ## Layout
 
 | Path | Purpose |
