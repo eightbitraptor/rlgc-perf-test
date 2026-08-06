@@ -1,0 +1,759 @@
+---
+title: "ruby-bench A/B performance analysis"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M %Z')`"
+output:
+  html_document:
+    theme: darkly
+    toc: true
+    toc_float:
+      collapsed: false
+    code_download: true
+params:
+  ab_file: "data/output_054.json"
+  aa_file: "data/output_053.json"
+  min_effect: 0.01
+  drift_threshold: 0.03
+  top_n: 6
+---
+
+```{css, echo=FALSE}
+:root {
+  --bg: #262b37;      --card: #2e3444;   --card2: #363d50;  --border: #434c61;
+  --text: #dfe4ef;    --muted: #a0aabf;  --faint: #8690a6;
+  --red: #eba8a0;     --red-soft: rgba(235,168,160,.13);
+  --green: #9ed4ae;   --green-soft: rgba(158,212,174,.13);
+  --amber: #e7c98d;   --amber-soft: rgba(231,201,141,.13);
+  --blue: #a3bfea;    --blue-soft: rgba(163,191,234,.14);
+}
+body { background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  font-size: 16.5px; line-height: 1.6; }
+.main-container { max-width: 1150px; }
+h1.title { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; color: #eef1f8; }
+h4.date { color: var(--faint); font-size: 0.9rem; }
+h1, h2, h3 { color: #eef1f8; font-weight: 700; letter-spacing: -0.01em; }
+h1 { font-size: 1.5rem; border-bottom: 1px solid var(--border); padding-bottom: 7px; margin-top: 2.3rem; }
+h2 { font-size: 1.2rem; margin-top: 1.7rem; }
+h3 { font-size: 1.05rem; }
+a { color: var(--blue); }
+p, li { color: var(--text); }
+strong { color: #f5f7fc; }
+code { background: #3a4155; color: #c7d0e2; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; }
+pre, pre code { background: var(--card2) !important; color: #c2cbde; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 0.82em; }
+
+/* ---- banners ---- */
+.banner { border: 1px solid var(--border); border-radius: 10px; padding: 13px 17px;
+  margin: 10px 0; background: var(--card); line-height: 1.6; }
+.banner b, .banner strong { color: #f5f7fc; }
+.banner.good  { border-color: rgba(158,212,174,.4); background: var(--green-soft); }
+.banner.bad   { border-color: rgba(235,168,160,.4); background: var(--red-soft); }
+.banner.info  { border-color: rgba(163,191,234,.4); background: var(--blue-soft); }
+.banner.warn  { border-color: rgba(231,201,141,.4); background: var(--amber-soft); }
+
+/* ---- chips ---- */
+.chip { display: inline-block; border-radius: 999px; padding: 2px 11px; font-size: 0.8rem;
+  font-weight: 600; margin: 0 3px; white-space: nowrap; }
+.chip-blue { background: var(--blue-soft);  color: var(--blue);  border: 1px solid rgba(163,191,234,.4); }
+.chip-red  { background: var(--red-soft);   color: var(--red);   border: 1px solid rgba(235,168,160,.4); }
+.chip-grey { background: rgba(160,170,191,.12); color: var(--muted); border: 1px solid var(--border); }
+
+/* ---- at-a-glance tables ---- */
+.gtable { font-size: 0.88rem; margin: 10px 0 22px 0; }
+.gtable td, .gtable th { padding: 5px 12px; }
+.gtable .gname { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem; white-space: nowrap; }
+.gtable .gchg { font-weight: 800; text-align: right; white-space: nowrap; font-size: 0.95rem; }
+.gtable th.r { text-align: right; }
+.gtable .gbar { width: 20%; min-width: 100px; }
+.gfill { height: 10px; border-radius: 3px; min-width: 2px; }
+.gfill.reg { background: linear-gradient(90deg, rgba(235,168,160,.95), rgba(235,168,160,.5)); }
+.gfill.imp { background: linear-gradient(90deg, rgba(158,212,174,.95), rgba(158,212,174,.5)); }
+.gfill.sug { background: linear-gradient(90deg, rgba(231,201,141,.95), rgba(231,201,141,.5)); }
+.gtable .gtime, .gtable .gci { color: var(--muted); white-space: nowrap; }
+.gtable .gaa { color: var(--faint); white-space: nowrap; }
+.gdrift { color: var(--amber); font-weight: 700; }
+
+/* ---- tables ---- */
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 0.9rem;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 10px 13px; border-bottom: 1px solid var(--border); background: var(--card2);
+  text-align: left; }
+td { padding: 8px 13px; border-bottom: 1px solid rgba(67,76,97,.55); color: var(--text); }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--blue-soft); }
+td.pos, span.pos { color: var(--red);   font-weight: 700; }
+td.neg, span.neg { color: var(--green); font-weight: 700; }
+caption { color: var(--faint); font-size: 0.83rem; caption-side: top; padding: 4px 0; }
+
+/* ---- details / summary ---- */
+details { border: 1px solid var(--border); border-radius: 10px; padding: 11px 17px;
+  margin: 12px 0; background: var(--card); }
+summary { cursor: pointer; color: var(--blue); font-weight: 600; }
+details[open] summary { margin-bottom: 8px; }
+
+/* ---- floating TOC ---- */
+.tocify { background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+.tocify .tocify-item, .tocify .list-group-item {
+  color: var(--muted); font-size: 0.88rem; background: transparent; border: none;
+  padding: 6px 14px; cursor: pointer; }
+.tocify .tocify-item:hover { background: var(--blue-soft); color: var(--text); }
+.tocify .tocify-item.active, .tocify .list-group-item.active {
+  background: var(--blue-soft) !important; color: var(--blue) !important;
+  font-weight: 600; }
+
+img { border-radius: 10px; border: 1px solid var(--border); max-width: 100%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25); }
+.figure, .caption { color: var(--faint); }
+#TOC { z-index: 10; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 10, dev = "png", dpi = 130,
+                      dev.args = list(bg = "#2e3444"))
+library(jsonlite); library(dplyr); library(tidyr); library(purrr); library(tibble)
+library(stringr); library(ggplot2); library(scales); library(knitr)
+
+C_BG <- "#2e3444"; C_GRID <- "#3c4457"; C_TEXT <- "#dfe4ef"; C_MUTED <- "#9ba5ba"
+PAL <- c(regression = "#eba8a0", improvement = "#9ed4ae", inconclusive = "#707c95")
+C_BAND <- "#3d465c"; C_ZERO <- "#5b667f"; C_MARK <- "#8b96ac"
+C_SIDE_BASE <- "#97a2b8"; C_SIDE_CAND <- "#a3bfea"
+
+theme_report <- function(base_size = 14) {
+  theme_minimal(base_size = base_size) +
+    theme(plot.background = element_rect(fill = C_BG, color = NA),
+          panel.background = element_rect(fill = C_BG, color = NA),
+          panel.grid.major = element_line(color = C_GRID, linewidth = 0.45),
+          panel.grid.minor = element_blank(),
+          text = element_text(color = C_TEXT),
+          axis.text = element_text(color = C_MUTED),
+          axis.title = element_text(color = C_MUTED, size = rel(0.85)),
+          plot.title = element_text(color = "#eef1f8", face = "bold", size = rel(1.1)),
+          plot.subtitle = element_text(color = C_MUTED, size = rel(0.8),
+                                       margin = margin(b = 10)),
+          legend.text = element_text(color = C_TEXT),
+          legend.position = "top", legend.justification = "left",
+          strip.text = element_text(color = C_TEXT, face = "bold"),
+          plot.margin = margin(14, 16, 10, 10))
+}
+theme_set(theme_report())
+
+fmt_ratio <- function(x) sprintf("%.3f", x)
+fmt_x     <- function(x) sprintf("%.2f\u00d7", x)
+fmt_chg   <- function(r) sprintf("%+.1f%%", (r - 1) * 100)
+fmt_ms <- function(s) {
+  ms <- s * 1000
+  dplyr::case_when(ms >= 100 ~ sprintf("%.0f ms", ms),
+                   ms >= 10  ~ sprintf("%.1f ms", ms),
+                   TRUE      ~ sprintf("%.2f ms", ms))
+}
+pct_lab <- function(b) sprintf("%+.0f%%", (b - 1) * 100)
+geomean <- function(x) exp(mean(log(x)))
+
+# "ruby 4.1.0dev (2026-08-05T02:35:23Z ractor-local-gc 1ec37f2d87) +ZJIT +PRISM [x86_64-linux]"
+parse_build <- function(desc) {
+  m <- str_match(desc, "^(\\S+ \\S+) \\((\\S+) (\\S+) ([0-9a-f]+)\\) (.*)$")
+  if (is.na(m[1, 1]))
+    return(tibble(version = desc, committed = NA, branch = NA, commit = NA, platform = NA))
+  tibble(version = m[1, 2], committed = m[1, 3], branch = m[1, 4],
+         commit = m[1, 5], platform = m[1, 6])
+}
+short_build <- function(desc) {
+  p <- parse_build(desc)
+  if (is.na(p$commit)) return(desc)
+  paste0(p$branch, " @ ", p$commit)
+}
+```
+
+```{r functions}
+load_run <- function(path) {
+  j <- jsonlite::fromJSON(path, simplifyVector = TRUE, simplifyDataFrame = FALSE)
+  sides <- names(j$raw_data)
+  stopifnot(length(sides) == 2)
+  iters <- map_dfr(sides, function(s) {
+    imap_dfr(j$raw_data[[s]], function(b, name) {
+      tibble(side = s, benchmark = name,
+             iter = seq_along(b$bench), time = as.numeric(b$bench))
+    })
+  })
+  meta <- map_dfr(sides, function(s) {
+    imap_dfr(j$raw_data[[s]], function(b, name) {
+      tibble(side = s, benchmark = name,
+             rss = as.numeric(b$rss %||% NA_real_),
+             maxrss = as.numeric(b$maxrss %||% NA_real_),
+             n_warmup = length(b$warmup), n_bench = length(b$bench))
+    })
+  })
+  cmds <- unlist(map(j$raw_data[[sides[1]]], "command_line"))
+  list(path = path, sides = sides, desc = j$metadata, iters = iters, meta = meta,
+       example_cmd = if (length(cmds)) cmds[[1]] else NA_character_)
+}
+
+# ratio > 1: candidate slower. CI: delta method, conservative df = min(n) - 1.
+summarise_pair <- function(run) {
+  base <- run$sides[1]; cand <- run$sides[2]
+  per_side <- run$iters |>
+    arrange(benchmark, side, iter) |>
+    group_by(benchmark, side) |>
+    summarise(n = n(), mu = mean(time), s = sd(time),
+              drift = mean(time[iter > max(iter) / 2]) / mean(time[iter <= max(iter) / 2]),
+              .groups = "drop")
+  per_side |>
+    pivot_wider(names_from = side, values_from = c(n, mu, s, drift)) |>
+    rename(n_b = !!paste0("n_", base),  n_c = !!paste0("n_", cand),
+           mu_b = !!paste0("mu_", base), mu_c = !!paste0("mu_", cand),
+           s_b = !!paste0("s_", base),   s_c = !!paste0("s_", cand),
+           drift_b = !!paste0("drift_", base), drift_c = !!paste0("drift_", cand)) |>
+    filter(!is.na(mu_b), !is.na(mu_c)) |>
+    mutate(ratio = mu_c / mu_b,
+           se = ratio * sqrt((s_b / mu_b)^2 / n_b + (s_c / mu_c)^2 / n_c),
+           crit = qt(0.975, df = pmax(pmin(n_b, n_c) - 1, 2)),
+           lo = ratio - crit * se, hi = ratio + crit * se)
+}
+
+rss_pair <- function(run) {
+  base <- run$sides[1]; cand <- run$sides[2]
+  run$meta |>
+    select(benchmark, side, rss, maxrss) |>
+    pivot_wider(names_from = side, values_from = c(rss, maxrss)) |>
+    rename(rss_b = !!paste0("rss_", base),  rss_c = !!paste0("rss_", cand),
+           mx_b = !!paste0("maxrss_", base), mx_c = !!paste0("maxrss_", cand)) |>
+    mutate(rss_ratio = rss_c / rss_b, maxrss_ratio = mx_c / mx_b)
+}
+```
+
+```{r load}
+ab <- load_run(params$ab_file)
+has_aa <- !is.null(params$aa_file) && nzchar(params$aa_file) && file.exists(params$aa_file)
+aa <- if (has_aa) load_run(params$aa_file) else NULL
+ab_stats <- summarise_pair(ab)
+aa_stats <- if (has_aa) summarise_pair(aa) else NULL
+
+if (has_aa) {
+  aa_join <- aa_stats |> transmute(benchmark, aa_ratio = ratio, own_noise = abs(log(ratio)))
+  sigma_g <- mad(log(aa_stats$ratio))
+} else {
+  aa_join <- tibble(benchmark = ab_stats$benchmark, aa_ratio = NA_real_, own_noise = 0)
+  sigma_g <- log(1 + params$min_effect) / 3
+}
+
+res <- ab_stats |>
+  left_join(aa_join, by = "benchmark") |>
+  mutate(own_noise = coalesce(own_noise, 0),
+         drift_flag = abs(drift_b - 1) > params$drift_threshold |
+                      abs(drift_c - 1) > params$drift_threshold,
+         eff = abs(log(ratio)),
+         significant = eff > 3 * sigma_g & eff > 2 * own_noise &
+                       (lo > 1 | hi < 1) & eff > log(1 + params$min_effect),
+         suggestive = !significant & abs(ratio - 1) > params$min_effect &
+                      (lo > 1 | hi < 1),
+         verdict = case_when(significant & ratio > 1 ~ "regression",
+                             significant & ratio < 1 ~ "improvement",
+                             TRUE ~ "inconclusive"),
+         label = ifelse(drift_flag, paste0(benchmark, " \u2020"), benchmark))
+
+gm <- geomean(res$ratio)
+n_reg <- sum(res$verdict == "regression"); n_imp <- sum(res$verdict == "improvement")
+regs <- res |> filter(verdict == "regression") |> arrange(desc(ratio))
+imps <- res |> filter(verdict == "improvement") |> arrange(ratio)
+sugs <- res |> filter(suggestive) |> arrange(desc(eff))
+
+rss_ab <- rss_pair(ab)
+if (has_aa) {
+  rss_aa <- rss_pair(aa) |> transmute(benchmark, rss_aa = rss_ratio)
+  sigma_rss <- mad(log(rss_pair(aa)$rss_ratio), na.rm = TRUE)
+} else {
+  rss_aa <- tibble(benchmark = rss_ab$benchmark, rss_aa = NA_real_)
+  sigma_rss <- log(1.03) / 3
+}
+rss_res <- rss_ab |>
+  left_join(rss_aa, by = "benchmark") |>
+  mutate(own = coalesce(abs(log(rss_aa)), 0), eff = abs(log(rss_ratio)),
+         flag = eff > pmax(3 * sigma_rss, 2 * own) & abs(rss_ratio - 1) > 0.03)
+rss_flagged <- rss_res |> filter(flag) |> arrange(desc(eff))
+
+base_build <- short_build(unlist(ab$desc[ab$sides[1]]))
+cand_build <- short_build(unlist(ab$desc[ab$sides[2]]))
+```
+
+# Introduction
+
+The data files behind this report are the raw JSON output of
+[ruby-bench](https://github.com/ruby/ruby-bench), a benchmark suite and
+harness for comparing Ruby builds.
+
+`run_benchmarks.rb` runs every benchmark in
+a fresh process for each Ruby executable and records per-iteration wall-clock
+times, RSS, and JIT statistics into one JSON file per comparison. The harness
+discards the first `r max(ab$meta$n_warmup)` iterations as warmup and then
+keeps iterating until a minimum time budget is met, so sample counts differ
+between sides. Each process is pinned to one core and runs with ASLR disabled,
+as the recorded command line shows:
+
+```{r example-cmd, results="asis"}
+if (!is.na(ab$example_cmd)) cat("```\n", ab$example_cmd, "\n```\n", sep = "")
+```
+
+## Builds under test
+
+```{r builds-table}
+build_rows <- bind_rows(
+  parse_build(unlist(ab$desc[ab$sides[1]])) |> mutate(Role = "baseline", .before = 1),
+  parse_build(unlist(ab$desc[ab$sides[2]])) |> mutate(Role = "candidate", .before = 1))
+if (has_aa) {
+  aa_desc <- unique(unlist(aa$desc[aa$sides]))
+  build_rows <- bind_rows(build_rows,
+    parse_build(aa_desc[1]) |> mutate(Role = "A/A calibration (both sides)", .before = 1))
+}
+build_rows |>
+  transmute(Role, Version = version, Branch = branch, Commit = commit,
+            Committed = committed, `Platform / flags` = platform) |>
+  kable()
+```
+
+Full version strings as recorded in the data files:
+
+```{r build-strings, results="asis"}
+cat("```\n")
+cat(sprintf("baseline:  %s\n", unlist(ab$desc[ab$sides[1]])))
+cat(sprintf("candidate: %s\n", unlist(ab$desc[ab$sides[2]])))
+if (has_aa) cat(sprintf("A/A:       %s\n", unique(unlist(aa$desc[aa$sides]))[1]))
+cat("```\n")
+```
+
+# At a glance
+
+```{r hero, results="asis"}
+cat(sprintf(
+  '<div class="banner info"><b>%d benchmarks</b> \u00b7 candidate is <b>%s %s</b> overall (geometric mean) \u00b7
+   <span class="chip chip-grey">baseline: %s</span>
+   <span class="chip chip-blue">candidate: %s</span></div>\n',
+  nrow(res), fmt_chg(gm), ifelse(gm > 1, "slower", "faster"), base_build, cand_build))
+
+if (n_reg > 0) {
+  w <- regs[1, ]
+  cat(sprintf('<div class="banner bad"><b>%d regressions</b> beyond the measured noise floor \u00b7 worst: <b>%s %s</b> (%s \u2192 %s)</div>\n',
+              n_reg, w$benchmark, fmt_chg(w$ratio), fmt_ms(w$mu_b), fmt_ms(w$mu_c)))
+} else {
+  cat('<div class="banner good"><b>Zero regressions.</b> No benchmark is significantly slower on the candidate build.</div>\n')
+}
+if (n_imp > 0) {
+  b <- imps[1, ]
+  cat(sprintf('<div class="banner good"><b>%d improvements</b> beyond the noise floor \u00b7 best: <b>%s %s</b> (%s \u2192 %s)</div>\n',
+              n_imp, b$benchmark, fmt_chg(b$ratio), fmt_ms(b$mu_b), fmt_ms(b$mu_c)))
+}
+if (has_aa) {
+  cat(sprintf('<div class="banner info">Verdicts are calibrated against an <b>A/A run</b> (identical builds): robust \u03c3 = %.2f%%, significance gate = %s. Within-run 95%% CIs must also exclude zero change.</div>\n',
+              100 * sigma_g, fmt_chg(exp(3 * sigma_g))))
+} else {
+  cat('<div class="banner warn"><b>No A/A calibration file.</b> A fixed 1% threshold replaces the measured noise floor.</div>\n')
+}
+```
+
+```{r glance-tables, results="asis"}
+glance_table <- function(d, cls) {
+  max_eff <- max(abs(log(res$ratio[res$significant | res$suggestive])))
+  rows <- vapply(seq_len(nrow(d)), function(i) {
+    r <- d[i, ]
+    w <- max(2, round(100 * abs(log(r$ratio)) / max_eff))
+    drift <- ifelse(r$drift_flag,
+                    ' <span class="gdrift" title="non-stationary run">\u2020</span>', "")
+    aa <- ifelse(is.na(r$aa_ratio), "\u2014",
+                 sprintf("\u00b1%.2f%%", 100 * abs(r$aa_ratio - 1)))
+    sprintf(paste0(
+      '<tr><td class="gname">%s%s</td>',
+      '<td class="gchg %s">%s</td>',
+      '<td class="gbar"><div class="gfill %s" style="width:%d%%"></div></td>',
+      '<td class="gtime">%s \u2192 %s</td>',
+      '<td class="gci">%s \u2026 %s</td>',
+      '<td class="gaa">%s</td></tr>'),
+      r$benchmark, drift,
+      ifelse(r$ratio > 1, "pos", "neg"), fmt_chg(r$ratio),
+      cls, w,
+      fmt_ms(r$mu_b), fmt_ms(r$mu_c),
+      fmt_chg(r$lo), fmt_chg(r$hi), aa)
+  }, character(1))
+  paste0('<table class="gtable"><thead><tr>',
+         '<th>Benchmark</th><th class="r">Change</th><th></th>',
+         '<th>Baseline \u2192 candidate</th><th>95% CI</th><th>A/A dev</th>',
+         '</tr></thead><tbody>', paste(rows, collapse = "\n"), '</tbody></table>')
+}
+if (nrow(regs) > 0)
+  cat('<h2>Significant regressions</h2>\n', glance_table(regs, "reg"), '\n')
+if (nrow(imps) > 0)
+  cat('<h2>Significant improvements</h2>\n', glance_table(imps, "imp"), '\n')
+if (nrow(sugs) > 0)
+  cat('<h2>Suggestive (fails the noise gates)</h2>\n', glance_table(sugs, "sug"), '\n')
+```
+
+# Data
+
+**A/B comparison file:** `` `r params$ab_file` `` — baseline side
+`` `r ab$sides[1]` ``, candidate side `` `r ab$sides[2]` ``.
+Ratios are candidate / baseline mean iteration time; above 1 is slower, and
+the % change columns show `(ratio - 1)`.
+
+```{r meta-aa, results="asis"}
+if (has_aa) {
+  cat("**A/A calibration file:** `", params$aa_file, "` \u2014 ",
+      "the identical build on both sides measures pipeline noise.\n\n", sep = "")
+  aa_desc <- unlist(aa$desc[aa$sides])
+  if (length(unique(aa_desc)) != 1) {
+    cat('<div class="banner bad"><b>WARNING:</b> the two sides of the A/A file are different builds. The noise calibration is invalid.</div>\n')
+  }
+}
+if (length(unique(unlist(ab$desc[ab$sides]))) == 1) {
+  cat('<div class="banner bad"><b>WARNING:</b> both sides of the A/B file report the same build.</div>\n')
+}
+```
+
+# Methods
+
+- The unit of comparison is the mean post-warmup iteration time per benchmark.
+- Each ratio gets a 95% CI by the delta method on the two sample means. The CI
+  reflects within-run variance only; between-process variance comes from the
+  A/A calibration.
+- **Noise floor (A/A):** the spread of A/A log-ratios across benchmarks
+  measures the total noise of one invocation pair. The global robust sigma is
+  `mad(log ratio)`; each benchmark also gets its own observed A/A deviation.
+- **Verdict rule.** A benchmark is a significant regression or improvement
+  only when all of these hold:
+  1. `|log ratio|` > 3 × global robust sigma from the A/A run;
+  2. `|log ratio|` > 2 × that benchmark's own A/A deviation;
+  3. the within-run 95% CI excludes 1.0;
+  4. the effect exceeds the practical floor of `r percent(params$min_effect)`.
+- **Suggestive** effects pass gates 3–4 but fail the noise gates 1–2.
+- **Stationarity check:** second-half mean / first-half mean per side. Values
+  beyond ±`r percent(params$drift_threshold)` flag the benchmark with †
+  (for example, late JIT compilation inside the measurement window).
+
+# Data quality
+
+```{r quality, results="asis"}
+drifters <- res |> filter(drift_flag)
+range_n <- range(c(res$n_b, res$n_c))
+cat(sprintf("Post-warmup sample sizes: %d\u2013%d iterations per side. %d of %d benchmarks drift more than %s between run halves.\n",
+            range_n[1], range_n[2], nrow(drifters), nrow(res), percent(params$drift_threshold)))
+if (nrow(drifters) > 0) {
+  drifters |>
+    transmute(Benchmark = benchmark,
+              `Baseline drift` = fmt_chg(drift_b),
+              `Candidate drift` = fmt_chg(drift_c),
+              `n (base / cand)` = sprintf("%d / %d", n_b, n_c)) |>
+    kable(caption = "Non-stationary benchmarks \u2014 interpret with caution (\u2020 in charts and tables).") |>
+    print()
+}
+```
+
+# Noise floor from the A/A run
+
+An A/A run feeds the whole pipeline — build, process launch, warmup,
+measurement — the *same* Ruby build on both sides. Every deviation from a
+ratio of 1.0 in that run is therefore measurement noise: scheduler decisions,
+cache and page placement, allocator state, and so on. The table below
+summarises how large that noise is across the suite; it is the yardstick that
+every A/B verdict in this report is measured against.
+
+```{r noise-table, results="asis"}
+if (has_aa) {
+  aa_devs <- sort(abs(aa_stats$ratio - 1))
+  tibble(Statistic = c("Geometric mean ratio", "Robust sigma of log ratio",
+                       "Median |change|", "p90 |change|", "Max |change|"),
+         Value = c(fmt_ratio(geomean(aa_stats$ratio)), sprintf("%.2f%%", 100 * sigma_g),
+                   percent(median(aa_devs), 0.01), percent(quantile(aa_devs, 0.9), 0.01),
+                   paste0(percent(max(aa_devs), 0.01), " (",
+                          aa_stats$benchmark[which.max(abs(aa_stats$ratio - 1))], ")"))) |>
+    kable() |> print()
+} else {
+  cat("No A/A file supplied; skipped.\n")
+}
+```
+
+**What the chart shows.** One point per benchmark: its absolute A/A deviation
+|ratio − 1|, ranked from quietest to noisiest, on a logarithmic scale. The
+dashed line is the significance gate derived from this distribution.
+
+**The statistics behind it.** The gate is three times a robust standard
+deviation of the A/A log-ratios, estimated with the median absolute deviation
+(MAD, scaled by 1.4826 so it is comparable to a normal σ). A robust estimator
+matters here because the distribution is heavy-tailed: most benchmarks sit
+near ±0.1%, but a few allocation- and GC-heavy ones swing by several percent
+between identical invocations. A plain standard deviation would let that tail
+inflate the gate for everyone. Instead the tail is handled per benchmark: the
+verdict rule also requires each A/B effect to exceed **twice the benchmark's
+own A/A deviation**, so an invocation-unstable benchmark needs a
+correspondingly larger effect before it counts.
+
+```{r noise-plot, fig.height=4.2}
+if (has_aa) {
+  aa_stats |>
+    mutate(dev = abs(ratio - 1)) |>
+    arrange(dev) |> mutate(rank = row_number()) |>
+    ggplot(aes(rank, pmax(dev, 1e-5))) +
+    geom_point(color = C_MARK, size = 1.8) +
+    geom_hline(yintercept = exp(3 * sigma_g) - 1, linetype = "dashed",
+               color = PAL[["regression"]], linewidth = 0.5) +
+    annotate("text", x = 2, y = (exp(3 * sigma_g) - 1) * 1.25, vjust = 0, hjust = 0,
+             label = "3 \u00d7 robust sigma (significance gate)",
+             color = PAL[["regression"]], size = 3.6) +
+    scale_y_log10(labels = percent_format(accuracy = 0.01)) +
+    labs(title = "A/A deviations per benchmark (identical builds)",
+         subtitle = "Each point is one benchmark. Points above the dashed line are invocation-unstable; their A/B verdicts require 2\u00d7 their own deviation.",
+         x = "benchmark, ranked by deviation", y = "|change|, log scale")
+}
+```
+
+# A/B results
+
+## Significant effects
+
+**What the chart shows.** Each row is a benchmark that passed every
+significance gate. The dot is the ratio of mean iteration times
+(candidate / baseline) drawn on a logarithmic axis and labelled as a
+percentage change — red dots are slower on the candidate, green dots faster.
+The horizontal bar through each dot is its 95% confidence interval, the
+shaded band around 0% is the ±3σ noise gate from the A/A run, each × is
+where the same benchmark landed in the A/A run, and † marks a benchmark whose
+run drifted.
+
+**The statistics behind it.** The interval comes from the delta method: the
+variance of a ratio of two sample means is approximated from the two relative
+variances, and the critical value uses a conservative Student's t with
+df = (smaller sample size − 1). This interval captures within-run sampling
+error only. Iteration times inside one process are autocorrelated and share
+process-level state (memory layout, code placement), so the interval alone
+would overstate certainty — that is precisely the gap the A/A gates close.
+The logarithmic axis keeps ratios symmetric: ×1.5 (+50%) and ×0.67 (−33%)
+sit the same distance from zero, so regressions and improvements can be
+compared by eye.
+
+```{r forest-sig, fig.height=max(4, 0.26 * sum(res$significant) + 1.8)}
+sig <- res |> filter(significant)
+band <- c(exp(-3 * sigma_g), exp(3 * sigma_g))
+brks <- c(0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 2)
+if (nrow(sig) > 0) {
+  p <- ggplot(sig, aes(ratio, reorder(label, -ratio), color = verdict)) +
+    annotate("rect", xmin = band[1], xmax = band[2], ymin = -Inf, ymax = Inf,
+             fill = C_BAND, alpha = 0.55) +
+    geom_vline(xintercept = 1, color = C_ZERO) +
+    geom_errorbarh(aes(xmin = lo, xmax = hi), height = 0, linewidth = 0.7) +
+    geom_point(size = 2.4)
+  if (has_aa) p <- p + geom_point(aes(x = aa_ratio), shape = 4, color = C_MARK,
+                                  size = 1.8, na.rm = TRUE)
+  p +
+    scale_x_continuous(trans = "log2", breaks = brks, labels = pct_lab) +
+    scale_color_manual(values = PAL, guide = "none") +
+    labs(title = "Significant changes in iteration time",
+         subtitle = "Bars: within-run 95% CI \u00b7 shaded band: 3\u03c3 A/A noise \u00b7 \u00d7 marks: the benchmark's A/A ratio \u00b7 \u2020: non-stationary",
+         x = "change vs baseline (log scale) \u2014 right of 0% = slower", y = NULL) +
+    theme(axis.text.y = element_text(size = 10.5, color = C_TEXT))
+}
+```
+
+<details><summary>All `r nrow(res)` benchmarks (forest plot)</summary>
+
+The same encoding as above, now including every benchmark that failed a gate
+(grey). Most grey points cluster inside the shaded noise band — the expected
+picture for genuine null results.
+
+```{r forest-all, fig.height=max(6, 0.19 * nrow(res) + 1.5)}
+p <- ggplot(res, aes(ratio, reorder(label, -ratio), color = verdict)) +
+  annotate("rect", xmin = band[1], xmax = band[2], ymin = -Inf, ymax = Inf,
+           fill = C_BAND, alpha = 0.55) +
+  geom_vline(xintercept = 1, color = C_ZERO) +
+  geom_errorbarh(aes(xmin = lo, xmax = hi), height = 0, linewidth = 0.5) +
+  geom_point(size = 1.8)
+if (has_aa) p <- p + geom_point(aes(x = aa_ratio), shape = 4, color = C_MARK,
+                                size = 1.4, na.rm = TRUE)
+p +
+  scale_x_continuous(trans = "log2", breaks = brks, labels = pct_lab) +
+  scale_color_manual(values = PAL) +
+  labs(title = "All benchmarks",
+       x = "change vs baseline (log scale) \u2014 right of 0% = slower", y = NULL, color = NULL) +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+</details>
+
+## Effects versus noise
+
+**What the chart shows.** Each curve is an empirical cumulative distribution
+(ECDF): pick a size of change on the x-axis, and the curve height is the
+fraction of benchmarks whose deviation is at most that size. The grey curve
+is the A/A run; the blue curve is the A/B comparison.
+
+**The statistics behind it.** The A/A curve is the empirical null
+distribution — the changes measurement noise produces on its own. If the
+candidate build changed nothing, the blue curve would lie on top of the grey
+one. Where the blue curve runs to the right of the grey, past the dashed 3σ
+gate, the comparison contains effects that noise cannot explain; the
+horizontal gap between the curves is how much larger those effects are than
+noise at the same quantile. This is the single-picture justification that the
+verdicts above are not artifacts of the pipeline.
+
+```{r ecdf, fig.height=4}
+ecdf_df <- bind_rows(
+  res |> transmute(dev = abs(log(ratio)), run = "A/B (baseline vs candidate)"),
+  if (has_aa) aa_stats |> transmute(dev = abs(log(ratio)), run = "A/A (identical builds)"))
+ggplot(ecdf_df, aes(pmax(exp(dev) - 1, 1e-5), color = run)) +
+  stat_ecdf(linewidth = 0.9) +
+  geom_vline(xintercept = exp(3 * sigma_g) - 1, linetype = "dashed", color = C_MARK) +
+  scale_x_log10(labels = percent_format(accuracy = 0.01)) +
+  scale_color_manual(values = c(C_SIDE_BASE, C_SIDE_CAND)) +
+  labs(title = "Where A/B separates from pipeline noise",
+       subtitle = "The horizontal gap between the curves right of the dashed line is the set of real effects.",
+       x = "|change|, log scale", y = "fraction of benchmarks", color = NULL)
+```
+
+## Full results table
+
+```{r verdict-tables, results="asis"}
+verdict_table <- function(d) {
+  d |>
+    arrange(desc(abs(log(ratio)))) |>
+    transmute(Benchmark = label,
+              Change = sprintf('<span class="%s">%s</span>',
+                               ifelse(ratio > 1, "pos", "neg"), fmt_chg(ratio)),
+              Ratio = fmt_x(ratio),
+              `95% CI` = sprintf("%s \u2026 %s", fmt_chg(lo), fmt_chg(hi)),
+              Baseline = fmt_ms(mu_b), Candidate = fmt_ms(mu_c),
+              `A/A dev` = ifelse(is.na(aa_ratio), "\u2014",
+                                 sprintf("\u00b1%.2f%%", 100 * abs(aa_ratio - 1)))) |>
+    kable(escape = FALSE)
+}
+cat('<details><summary>All benchmarks, sorted by change</summary>\n\n')
+print(verdict_table(res))
+cat('\n</details>\n')
+```
+
+# Iteration traces of the top movers
+
+**What the chart shows.** Every dot is one measured iteration: x is its
+position in the run, y its wall-clock time — grey for the baseline process,
+blue for the candidate. The panels are the `r params$top_n` largest
+significant effects.
+
+**Why it matters statistically.** Everything above compares *means*, and a
+mean is only a fair summary of a stationary series. These traces make that
+assumption inspectable. Two flat, separated bands are the signature of a
+real, stable effect: the vertical separation is the effect size, and the
+thickness of each band is the within-run noise the confidence intervals are
+built from. Trends, steps, or periodic swings inside a band indicate drift —
+late JIT compilation, GC phase changes — which is what the † flag and the
+half-run drift check in Data quality detect.
+
+```{r traces, fig.height=7.5}
+top <- res |> filter(significant) |> arrange(desc(eff)) |> slice_head(n = params$top_n)
+side_pal <- setNames(c(C_SIDE_BASE, C_SIDE_CAND), ab$sides)
+side_lab <- setNames(c(paste0(ab$sides[1], " (baseline)"), paste0(ab$sides[2], " (candidate)")),
+                     ab$sides)
+ab$iters |>
+  semi_join(top, by = "benchmark") |>
+  mutate(benchmark = factor(benchmark, levels = top$benchmark)) |>
+  ggplot(aes(iter, time * 1000, color = side)) +
+  geom_point(size = 0.55, alpha = 0.55) +
+  facet_wrap(~benchmark, scales = "free", ncol = 2) +
+  scale_color_manual(values = side_pal, labels = side_lab,
+                     guide = guide_legend(override.aes = list(size = 2.6, alpha = 1))) +
+  labs(title = "Per-iteration times, largest significant effects",
+       x = "post-warmup iteration", y = "iteration time (ms)", color = NULL)
+```
+
+# Memory (post-full-GC RSS)
+
+The harness records `rss` once per process, after a forced full GC — a single
+snapshot. Only changes beyond the A/A noise for the same benchmark count.
+`maxrss` is the peak from `getrusage`.
+
+```{r rss-summary, results="asis"}
+cat(sprintf('<div class="banner %s"><b>%d benchmarks</b> change post-GC RSS beyond the noise gates (3\u03c3 = %s, minimum \u00b13%%).</div>\n',
+            ifelse(nrow(rss_flagged) > 0, "warn", "good"), nrow(rss_flagged),
+            fmt_chg(exp(3 * sigma_rss))))
+if (nrow(rss_flagged) > 0) {
+  rss_flagged |>
+    transmute(Benchmark = benchmark,
+              `RSS change` = sprintf('<span class="%s">%s</span>',
+                                     ifelse(rss_ratio > 1, "pos", "neg"), fmt_chg(rss_ratio)),
+              `RSS ratio` = fmt_x(rss_ratio),
+              `Peak (maxrss)` = ifelse(is.na(maxrss_ratio), "\u2014", fmt_chg(maxrss_ratio)),
+              Baseline = sprintf("%.0f MB", rss_b / 2^20),
+              Candidate = sprintf("%.0f MB", rss_c / 2^20),
+              `A/A dev` = ifelse(is.na(rss_aa), "\u2014",
+                                 sprintf("\u00b1%.1f%%", 100 * abs(rss_aa - 1)))) |>
+    kable(escape = FALSE) |> print()
+}
+```
+
+**What the chart shows.** For each flagged benchmark, the filled dot is the
+change in resident set size measured once after a forced full GC; the open
+circle is the change in peak memory (`getrusage` maxrss) over the whole run.
+The axis is logarithmic, matching the time charts.
+
+**The statistics behind it.** Unlike iteration times, there is only one RSS
+observation per process, so no confidence interval exists. The verdict leans
+entirely on the A/A calibration: a benchmark is flagged only when its RSS
+change exceeds both three robust σ of the A/A RSS ratios and twice its own
+A/A RSS deviation, with a ±3% practical floor. Post-GC RSS on some benchmarks
+is genuinely bimodal across invocations (page-release timing), so single-run
+memory verdicts deserve replication before anyone acts on them.
+
+```{r rss-plot, fig.height=max(3, 0.32 * nrow(rss_flagged) + 1.6)}
+if (nrow(rss_flagged) > 0) {
+  rss_flagged |>
+    mutate(direction = ifelse(rss_ratio > 1, "regression", "improvement")) |>
+    ggplot(aes(rss_ratio, reorder(benchmark, -rss_ratio), color = direction)) +
+    geom_vline(xintercept = 1, color = C_ZERO) +
+    geom_point(size = 2.6) +
+    geom_point(aes(x = maxrss_ratio), shape = 1, size = 2.6, na.rm = TRUE) +
+    scale_x_continuous(trans = "log2", labels = pct_lab) +
+    scale_color_manual(values = PAL) +
+    labs(title = "RSS changes beyond noise",
+         subtitle = "Filled: post-GC RSS \u00b7 open circles: peak (maxrss)",
+         x = "memory change vs baseline (log scale) \u2014 right of 0% = more memory",
+         y = NULL, color = NULL) +
+    theme(axis.text.y = element_text(size = 10.5, color = C_TEXT))
+}
+```
+
+# Conclusions
+
+```{r conclusions, results="asis"}
+top_reg <- regs |> slice_head(n = 3)
+top_imp <- imps |> slice_head(n = 3)
+cat(sprintf("- The candidate build is **%s %s** than the baseline by geometric mean over %d benchmarks.\n",
+            fmt_chg(gm), ifelse(gm > 1, "slower", "faster"), nrow(res)))
+if (n_reg > 0) cat(sprintf("- **%d regressions** beyond the noise floor. Largest: %s.\n", n_reg,
+  paste(sprintf("%s (%s)", top_reg$benchmark, fmt_chg(top_reg$ratio)), collapse = ", ")))
+if (n_imp > 0) cat(sprintf("- **%d improvements** beyond the noise floor. Largest: %s.\n", n_imp,
+  paste(sprintf("%s (%s)", top_imp$benchmark, fmt_chg(top_imp$ratio)), collapse = ", ")))
+if (nrow(rss_flagged) > 0) cat(sprintf("- **%d memory changes** beyond noise; see the memory section.\n",
+                                       nrow(rss_flagged)))
+cat("- All verdicts rest on one invocation pair plus the A/A calibration. An effect that must stand alone (a release decision, a regression report) needs replicate invocations of that benchmark.\n")
+```
+
+# Reproducing this report
+
+Render with new data by pointing the parameters at other files:
+
+```r
+rmarkdown::render(
+  "analysis.Rmd",
+  params = list(ab_file = "data/new_ab.json", aa_file = "data/new_aa.json"),
+  output_file = "analysis-new.html"
+)
+```
+
+- `ab_file`: ruby-bench JSON; first executable = baseline, second = candidate.
+- `aa_file`: the same pipeline with the identical build on both sides.
+  Optional; without it a fixed 1% threshold replaces the measured noise floor.
+- `min_effect`, `drift_threshold`, `top_n` tune the gates described in Methods.
+
+<details><summary>Session info</summary>
+
+```{r session, echo=FALSE}
+sessionInfo()
+```
+
+</details>
